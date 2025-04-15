@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Joystick Rumble Alternator (Joy-Con Support - Experimental)</title>
+<style>
+  body { font-family: sans-serif; }
+  label { display: block; margin-bottom: 5px; }
+  input[type="number"] { width: 80px; }
+  button { padding: 10px 20px; }
+</style>
+</head>
+<body>
+
+  <h1>Joystick Rumble Alternator (Joy-Con Support - Experimental)</h1>
+
+  <label for="intensity">Intensity (0-1):</label>
+  <input type="number" id="intensity" value="0.5" min="0" max="1" step="0.01"><br><br>
+
+  <label for="frequency">Frequency (Hz):</label>
+  <input type="number" id="frequency" value="2" min="0.1" step="0.1"><br><br>
+
+  <button id="startButton">Start Rumble</button>
+  <button id="stopButton" disabled>Stop Rumble</button>
+
+  <p id="status">No gamepad connected.</p>
+
+  <script>
+    let gamepad = null;
+    let intervalId = null;
+    const intensityInput = document.getElementById('intensity');
+    const frequencyInput = document.getElementById('frequency');
+    const startButton = document.getElementById('startButton');
+    const stopButton = document.getElementById('stopButton');
+    const statusDisplay = document.getElementById('status');
+
+    function connectHandler(e) {
+      if (e.gamepad) {
+        gamepad = e.gamepad;
+        statusDisplay.textContent = `Gamepad connected: ${gamepad.id}`;
+        startButton.disabled = false;
+      }
+    }
+
+    function disconnectHandler(e) {
+      if (e.gamepad && e.gamepad.index === (gamepad ? gamepad.index : -1)) {
+        gamepad = null;
+        clearInterval(intervalId);
+        intervalId = null;
+        statusDisplay.textContent = 'Gamepad disconnected.';
+        startButton.disabled = true;
+        stopButton.disabled = true;
+      }
+    }
+
+    window.addEventListener('gamepadconnected', connectHandler);
+    window.addEventListener('gamepaddisconnected', disconnectHandler);
+
+    // Poll for gamepad connection if event doesn't fire immediately
+    function pollGamepads() {
+      const gamepads = navigator.getGamepads ? navigator.getGamepads() : (navigator.webkitGetGamepads ? navigator.webkitGetGamepads() : []);
+      for (let i = 0; i < gamepads.length; i++) {
+        if (gamepads[i] && !gamepad) {
+          gamepad = gamepads[i];
+          statusDisplay.textContent = `Gamepad connected (via polling): ${gamepad.id}`;
+          startButton.disabled = false;
+          break;
+        }
+      }
+    }
+    setInterval(pollGamepads, 500);
+
+    function startRumble() {
+      if (!gamepad || !gamepad.vibrationActuator) {
+        statusDisplay.textContent = 'No gamepad with vibration support found.';
+        return;
+      }
+
+      const intensity = parseFloat(intensityInput.value);
+      const frequency = parseFloat(frequencyInput.value);
+
+      if (isNaN(intensity) || intensity < 0 || intensity > 1 || isNaN(frequency) || frequency <= 0) {
+        statusDisplay.textContent = 'Invalid intensity or frequency values.';
+        return;
+      }
+
+      let leftRumble = true;
+      const intervalTime = 1000 / (2 * frequency); // Half the period for each side
+
+      clearInterval(intervalId); // Clear any previous interval
+
+      intervalId = setInterval(() => {
+        if (!gamepad || !gamepad.vibrationActuator) {
+          clearInterval(intervalId);
+          intervalId = null;
+          statusDisplay.textContent = 'Gamepad disconnected during rumble.';
+          startButton.disabled = false;
+          stopButton.disabled = true;
+          return;
+        }
+
+        const leftIntensity = leftRumble ? intensity : 0;
+        const rightIntensity = leftRumble ? 0 : intensity;
+
+        if (gamepad.id.toLowerCase().includes('nintendo switch')) {
+          // Experimental Joy-Con rumble (may not work perfectly)
+          const rumbleOptionsLeft = {
+            duration: intervalTime,
+            weakMagnitude: leftIntensity,
+            strongMagnitude: leftIntensity,
+          };
+
+          const rumbleOptionsRight = {
+            duration: intervalTime,
+            weakMagnitude: rightIntensity,
+            strongMagnitude: rightIntensity,
+          };
+
+          if (gamepad.vibrationActuator.hasOwnProperty('playEffect')) {
+            gamepad.vibrationActuator.playEffect('vibration', rumbleOptionsLeft);
+            // Attempt to trigger right rumble shortly after (may need adjustment)
+            setTimeout(() => {
+              if (gamepad && gamepad.vibrationActuator) {
+                gamepad.vibrationActuator.playEffect('vibration', rumbleOptionsRight);
+              }
+            }, intervalTime / 4); // Experiment with delay
+          } else if (gamepad.vibrationActuator.hasOwnProperty('pulse')) {
+            // pulse might not support independent left/right
+            gamepad.vibrationActuator.pulse(leftIntensity * 100, intervalTime);
+            setTimeout(() => {
+              if (gamepad && gamepad.vibrationActuator) {
+                gamepad.vibrationActuator.pulse(rightIntensity * 100, intervalTime);
+              }
+            }, intervalTime / 4);
+          } else {
+            console.warn("Generic 'vibration' or 'pulse' effect not supported well on this Joy-Con.");
+          }
+        } else {
+          // Default dual-rumble for other gamepads
+          gamepad.vibrationActuator.playEffect('dual-rumble', {
+            duration: intervalTime,
+            strongMagnitude: leftIntensity,
+            weakMagnitude: rightIntensity,
+          });
+        }
+
+        leftRumble = !leftRumble;
+      }, intervalTime);
+
+      startButton.disabled = true;
+      stopButton.disabled = false;
+      statusDisplay.textContent = 'Rumble started.';
+    }
+
+    function stopRumble() {
+      if (gamepad && gamepad.vibrationActuator) {
+        if (gamepad.id.toLowerCase().includes('nintendo switch') && gamepad.vibrationActuator.hasOwnProperty('playEffect')) {
+          gamepad.vibrationActuator.playEffect('vibration', { duration: 0, weakMagnitude: 0, strongMagnitude: 0 });
+        } else if (gamepad.vibrationActuator.hasOwnProperty('pulse')) {
+          gamepad.vibrationActuator.pulse(0, 0);
+        }
+        else {
+          gamepad.vibrationActuator.playEffect('dual-rumble', { duration: 0, strongMagnitude: 0, weakMagnitude: 0 });
+        }
+      }
+      clearInterval(intervalId);
+      intervalId = null;
+      startButton.disabled = false;
+      stopButton.disabled = true;
+      statusDisplay.textContent = 'Rumble stopped.';
+    }
+
+    startButton.addEventListener('click', startRumble);
+    stopButton.addEventListener('click', stopRumble);
+  </script>
+
+</body>
+</html>
